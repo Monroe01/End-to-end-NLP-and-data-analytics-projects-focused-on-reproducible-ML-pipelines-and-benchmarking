@@ -1,9 +1,10 @@
 # End-to-end-NLP-and-data-analytics-projects-focused-on-reproducible-ML-pipelines-and-benchmarking
 
-=
+
 ## Overview
 This repository showcases an end-to-end machine learning pipeline for benchmarking multiple NLP models on large-scale user-generated text data. 
 The project emphasizes reproducibility, model evaluation under class imbalance, and multi-layer validation using both supervised learning and lexicon-based analysis.
+dataset: https://nijianmo.github.io/amazon/index.html  
 
 ## System Architecture
 Gzipped Dataset  
@@ -22,8 +23,9 @@ Gzipped Dataset
 
 ## How to Run
 1. Install required packages from `requirements.txt`
-2. Open `src/grouppro.Rmd` in RStudio
-3. Run all cells to reproduce the pipeline and results
+2. download the data from datasets
+3. Open `src/grouppro.Rmd` in RStudio
+4. Run all cells to reproduce the pipeline and results
 
 ## Results Summary
 - SVM and Random Forest achieved >80% accuracy on TF-IDF features
