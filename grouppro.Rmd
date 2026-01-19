@@ -1,0 +1,230 @@
+---
+title: "grouppro"
+author: "Menglu Liu"
+date: "2025-10-25"
+output: html_document
+---
+
+```{r}
+library(jsonlite)
+# 第一步：计算总行数（只需一次）
+# gzip文件很大，可以用R.utils::countLines更快
+library(R.utils)
+```
+
+
+```{r}
+library(jsonlite)
+gz_path <- "/Users/mengluliu/Desktop/NTU/social media analytic/group work/Video_Games.json.gz"
+set.seed(123)  # 确保可重复
+
+
+# 第一步：计算总行数（只需一次）
+# gzip文件很大，可以用R.utils::countLines更快
+library(R.utils)
+total_lines <- countLines(gz_path)
+total_lines
+
+# 第二步：随机抽取 10000 个行号
+sample_lines <- sort(sample(total_lines, 5000))
+
+# 第三步：流式读取文件
+con <- gzfile(gz_path, "rt")
+
+# 建立计数器与结果容器
+i <- 0
+sampled <- character(5000)
+j <- 1
+
+while (length(line <- readLines(con, n = 1)) > 0) {
+  i <- i + 1
+  if (i == sample_lines[j]) {
+    sampled[j] <- line
+    j <- j + 1
+    if (j > 5000) break
+  }
+}
+close(con)
+
+# 第四步：解析为 data.frame
+sample_df <- stream_in(textConnection(sampled))
+```
+
+
+
+
+# data pre-processing and cleaning
+```{r}
+library(dplyr)
+library(stringr)
+
+prep_df <- sample_df %>%
+  # 1) 只保留三列，并做基础清洗
+  transmute(
+    overall = as.numeric(overall),
+    reviewText = str_squish(as.character(reviewText)),
+    summary = str_squish(as.character(summary))
+  ) %>%
+  # 2) 评分范围过滤：0~5
+  filter(!is.na(overall), overall >= 0, overall <= 5) %>%
+  # 3) 生成情感标签：>3 正面，<3 负面；=3 作为 NA 丢弃
+  mutate(
+    sentiment = case_when(
+      overall > 3 ~ "positive",
+      overall < 3 ~ "negative",
+      TRUE ~ NA_character_   # overall == 3 -> NA
+    )
+  ) %>%
+  # 4) 去掉所有 NA（含 sentiment / reviewText / summary 等）
+  #    同时把空字符串视为缺失（更干净，可删除：na_if("", ...) 这一步）
+  mutate(
+    reviewText = na_if(reviewText, ""),
+    summary = na_if(summary, "")
+  ) %>%
+  filter(complete.cases(.))
+
+# 小检查
+dim(prep_df)           # 行数、列数
+head(prep_df, 3)       # 预览
+table(prep_df$sentiment)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(caret)
+library(e1071)
+library(naivebayes)
+library(nnet)
+library(tm)
+```
+# 向量化vectoerization
+
+```{r}
+df <- prep_df %>%
+  select(reviewText, sentiment)
+
+set.seed(123)
+train_index <- createDataPartition(df$sentiment, p = 0.7, list = FALSE)
+train_df <- df[train_index, ]
+test_df  <- df[-train_index, ]
+
+# 创建语料和向量化器
+train_corpus <- VCorpus(VectorSource(train_df$reviewText))
+test_corpus  <- VCorpus(VectorSource(test_df$reviewText))
+
+# 预处理（小写、去标点、去停用词等）
+clean_corpus <- function(corpus) {
+  corpus %>%
+    tm_map(content_transformer(tolower)) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(removeNumbers) %>%
+    tm_map(removeWords, stopwords("english")) %>%
+    tm_map(stripWhitespace)
+}
+
+train_corpus <- clean_corpus(train_corpus)
+test_corpus  <- clean_corpus(test_corpus)
+
+# 创建 TF-IDF 矩阵
+train_tfidf <- DocumentTermMatrix(train_corpus, control = list(weighting = weightTfIdf))
+test_tfidf  <- DocumentTermMatrix(test_corpus, control = list(weighting = weightTfIdf, dictionary = Terms(train_tfidf)))
+
+# 转为矩阵
+train_matrix <- as.matrix(train_tfidf)
+test_matrix  <- as.matrix(test_tfidf)
+```
+
+# SVM
+```{r}
+svm_model <- svm(train_matrix, as.factor(train_df$sentiment), kernel = "linear")
+svm_pred <- predict(svm_model, test_matrix)
+confusionMatrix(svm_pred, as.factor(test_df$sentiment))
+```
+
+# Naive Bayes
+```{r}
+nb_model <- naive_bayes(x = train_matrix, y = as.factor(train_df$sentiment))
+nb_pred <- predict(nb_model, test_matrix)
+confusionMatrix(nb_pred, as.factor(test_df$sentiment))
+```
+
+
+
+```{r}
+# Random Forest
+library(randomForest)
+set.seed(123)
+
+rf_model <- randomForest(
+  x = train_matrix,
+  y = as.factor(train_df$sentiment),
+  ntree = 3
+)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 简单神经网络（单层）
+
+```{r}
+library(Matrix)
+library(irlba)   # 快速SVD
+library(nnet)
+library(caret)
+
+# 假设你已有：train_tfidf, test_tfidf（DocumentTermMatrix → as("dgCMatrix")）
+train_m <- as(train_tfidf, "dgCMatrix")
+test_m  <- as(test_tfidf,  "dgCMatrix")
+
+# 1) 截断SVD到 k 维（例如 300）
+set.seed(123)
+k <- 300
+svd_fit <- irlba(train_m, nv = k, nu = 0)  # 只要右奇异向量V即可
+# 2) 投影到低维
+train_svd <- as.matrix(train_m %*% svd_fit$v)  # n_train x k
+test_svd  <- as.matrix(test_m  %*% svd_fit$v)  # n_test  x k
+
+# 3) 组装为数据框并训练 nnet
+train_df_svd <- data.frame(sentiment = factor(train_df$sentiment), train_svd)
+test_df_svd  <- data.frame(sentiment = factor(test_df$sentiment),  test_svd)
+
+set.seed(123)
+nn_model <- nnet(
+  sentiment ~ ., data = train_df_svd,
+  size = 8,          # 隐层单元（可调：5–32）
+  maxit = 200,
+  MaxNWts = 1e6,     # 放宽上限（低维后其实也够用）
+  trace = FALSE
+)
+
+nn_pred <- predict(nn_model, newdata = test_df_svd, type = "class")
+confusionMatrix(nn_pred, test_df_svd$sentiment)
+```
+
+```{r}
+nn_model <- nnet(as.factor(sentiment) ~ ., data = as.data.frame(cbind(sentiment = train_df$sentiment, train_matrix)),
+                 size = 5, maxit = 200, linout = FALSE)
+nn_pred <- predict(nn_model, as.data.frame(test_matrix), type = "class")
+confusionMatrix(nn_pred, as.factor(test_df$sentiment))
+```
+
